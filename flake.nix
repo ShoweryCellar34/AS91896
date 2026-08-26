@@ -11,40 +11,27 @@
     in {
       devShells = forAllSystems (system:
         let
-          pkgs     = import nixpkgs { inherit system; };
-          llvmPkgs = pkgs.llvmPackages;
+          pkgs = import nixpkgs { inherit system; };
         in {
-          default = pkgs.mkShell {
+          default = (pkgs.mkShell.override { stdenv = pkgs.clangStdenv; }) {
+            hardeningDisable = [ "all" ];
             nativeBuildInputs = with pkgs; [
               git
-              llvmPkgs.clang
-              llvmPkgs.lld
-              llvmPkgs.lldb
-              llvmPkgs.clang-tools
+              llvmPackages.llvm
+              llvmPackages.lld
+              llvmPackages.lldb
+              llvmPackages.clang-tools
+              gcc
               cmake
               ninja
               pkg-config
-              include-what-you-use # -> CMAKE_C_INCLUDE_WHAT_TO_USE
-              ccache               # -> CMAKE_C_COMPILER_LAUNCHER
-              cppcheck             # -> CMAKE_C_CPPCHECK
+              include-what-you-use
+              ccache
+              cppcheck
+              lcov
               valgrind
-
-              wayland-scanner
-              shader-slang
+              doxygen
             ];
-
-            # buildInputs = with pkgs; [
-            # ];
-
-            # shellHook = ''
-            #   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
-
-            #   ]}:$LD_LIBRARY_PATH"
-            # '';
-
-            env = {
-              CC = "clang";
-            };
           };
         });
     };

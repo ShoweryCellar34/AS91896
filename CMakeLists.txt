@@ -1,77 +1,135 @@
-# Set required cmake version and define project
-cmake_minimum_required(VERSION 3.15)
-project(ExampleProjectName LANGUAGES C VERSION 0.0.0)
+cmake_minimum_required(VERSION 3.20)
+project(AS91896 LANGUAGES CXX VERSION 0.0.1)
 
-# Set the C Standard Settings 
-set(CMAKE_C_STANDARD 99)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD          20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS        OFF)
 
-# Define all source files and add executable
-set(SOURCES
-    source/main.c
-)
-add_executable(${PROJECT_NAME} ${SOURCES})
+# Export the compiler commands for LSP programs
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Set compile flags and enable static linking
-set(BUILD_SHARED_LIBS OFF)
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wpedantic
-        $<$<CONFIG:Debug>:-g3 -ggdb -Og -fno-omit-frame-pointer -Wshadow $<$<PLATFORM_ID:Windows>:-fsanitize=address,undefined>>
-        $<$<CONFIG:Release>:-O3 -march=native -flto -DNDEBUG -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fstack-clash-protection -fPIE -pie -Wl,-z,relro,-z,now -Werror -s>
-    )
-
-    target_link_options(${PROJECT_NAME} PRIVATE
-        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
-        $<$<CONFIG:Release>:-static>
-    )
-elseif(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /W4 /analyze
-        $<$<CONFIG:Debug>:/Od /Zi /RTC1 /MDd /GS /JMC /fsanitize=address /D_DEBUG>
-        $<$<CONFIG:Release>:/O2 /GL /Zi /GS /DNDEBUG>
-    )
-
-    target_link_options(${PROJECT_NAME} PRIVATE /INCREMENTAL:NO
-        $<$<CONFIG:Release>:/LTCG /OPT:REF,ICF>
-    )
-
-    target_compile_definitions(${PROJECT_NAME} PRIVATE
-        "_CRT_SECURE_NO_WARNINGS"
-    )
-
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# Set debug build type if no build type is set 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
 
-# Include fetch content 
-# include(FetchContent)
-
-# Example dependancy
-# FetchContent_Declare(
-#     example
-#     GIT_REPOSITORY https://example.com/example.git
-#     GIT_TAG        exampleTag
-# )
-# FetchContent_MakeAvailable(example)
-
-# Link dependencies to executable
-# target_link_libraries(${PROJECT_NAME} PRIVATE)
-
-# Set the include directories
-target_include_directories(${PROJECT_NAME} PRIVATE 
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/headers>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
+# Set build variant compile and link options
+add_compile_options(
+    "$<$<CONFIG:Debug>:-O0;-g3;-fno-omit-frame-pointer;-fsanitize=address,undefined;--coverage>"
+    "$<$<CONFIG:Release>:-O3;-DNDEBUG>"
+    "$<$<CONFIG:RelWithDebInfo>:-O2;-g;-DNDEBUG>"
+    "$<$<CONFIG:MinSizeRel>:-Os;-DNDEBUG>"
+)
+add_link_options(
+    "$<$<CONFIG:Debug>:-fsanitize=address,undefined;--coverage>"
 )
 
-# Generate a header with cmake project infomation
+# Check if Inter Procedural Optimization is supported
+include(CheckIPOSupported)
+check_ipo_supported()
+
+# Ensure necessary tooling is present
+find_program(CCACHE_PROGRAM     ccache               REQUIRED)
+find_program(CLANG_TIDY_PROGRAM clang-tidy           REQUIRED)
+find_program(IWYU_PROGRAM       include-what-you-use REQUIRED)
+find_program(CPPCHECK_PROGRAM   cppcheck             REQUIRED)
+find_program(LCOV_PROGRAM       lcov                 REQUIRED)
+find_program(GENHTML_PROGRAM    genhtml              REQUIRED)
+
+find_package(Doxygen REQUIRED)
+
+# Enable caching of unchanged objects during building
+set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+
+# Get dependencies
+include(FetchContent)
+
+# Define a dependency helper function
+function(fetch_dependency dependencyName gitRepo gitTag)
+    FetchContent_Declare(${dependencyName}
+        GIT_REPOSITORY ${gitRepo}
+        GIT_TAG        ${gitTag}
+        GIT_PROGRESS   TRUE
+        GIT_SHALLOW    TRUE
+        EXCLUDE_FROM_ALL
+    )
+    FetchContent_MakeAvailable(${dependencyName})
+endfunction()
+
+# Configure options for dependencies
+set(FTXUI_ENABLE_INSTALL OFF)
+
+# Declare dependencies
+fetch_dependency(ftxui https://github.com/arthursonzogni/ftxui.git v7.0.3)
+
+# Set target name
+set(TARGET_NAME "mazeTest")
+
+# Create target
+add_executable(${TARGET_NAME}
+    source/main.cpp
+)
+
+# Set target include directories
+target_include_directories(${TARGET_NAME} PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/headers>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
+    ${stb_SOURCE_DIR}
+)
+
+# Set target link libraries
+target_link_libraries(${TARGET_NAME}
+    PRIVATE ftxui::ftxui
+)
+
+target_compile_definitions(${TARGET_NAME} PRIVATE DEBUG_BUILD=$<CONFIG:Debug>)
+
+# Generate configure file for target
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/headers/projectData.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/generated/projectData.h"
 )
 
-# Delete old resources and copy new ones
-add_custom_command(
-    TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/resources"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/resources"
-    COMMENT "Removing old resources and copying new ones for ${CMAKE_BUILD_TYPE} build..."
+# Enable IPO for target
+set_property(TARGET ${TARGET_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+
+# Enable all warnings and treat them as errors
+target_compile_options(${TARGET_NAME} PRIVATE
+    -Wall -Wextra -Wpedantic -Werror
+    -Wshadow -Wconversion -Wsign-conversion
+    -Wcast-align -Wnull-dereference -Wdouble-promotion
+    -Wformat=2 -Wstrict-prototypes
+    -Wmissing-prototypes # Not very good for macros, disable if causing problems
 )
+set_target_properties(${TARGET_NAME} PROPERTIES
+    C_CLANG_TIDY           "${CLANG_TIDY_PROGRAM}"
+    C_INCLUDE_WHAT_YOU_USE "${IWYU_PROGRAM}"
+)
+
+# Copy new resources and compile shaders
+add_custom_command(
+    TARGET  ${TARGET_NAME} POST_BUILD
+
+    COMMAND ${CMAKE_COMMAND} -E echo "Removing old resources from build folder"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:${TARGET_NAME}>/resources"
+
+    COMMAND ${CMAKE_COMMAND} -E echo "Copying new resources to build folder"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:${TARGET_NAME}>/resources"
+)
+
+# Create the spell check target
+add_custom_target(cppcheck
+    COMMAND           ${CPPCHECK_PROGRAM} --enable=all --std=c++20 --project=${CMAKE_BINARY_DIR}/compile_commands.json
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+# Create the coverage target
+add_custom_target(coverage
+    COMMAND           ${LCOV_PROGRAM} --capture --directory . --output-file coverage.info
+    COMMAND           ${GENHTML_PROGRAM} coverage.info --output-directory coverage_html
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT           "Report: ${CMAKE_BINARY_DIR}/coverage_html/index.html"
+)
+
+# Create the doxygen target
+doxygen_add_docs(docs ${CMAKE_SOURCE_DIR}/src COMMENT "Generating docs")
