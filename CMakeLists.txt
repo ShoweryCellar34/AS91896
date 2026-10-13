@@ -5,24 +5,17 @@ set(CMAKE_CXX_STANDARD          20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
 
-# Export the compiler commands for LSP programs
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_C_STANDARD          11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS        OFF)
 
 # Set debug build type if no build type is set 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
 
-# Set build variant compile and link options
-add_compile_options(
-    "$<$<CONFIG:Debug>:-O0;-g3;-fno-omit-frame-pointer;-fsanitize=address,undefined;--coverage>"
-    "$<$<CONFIG:Release>:-O3;-DNDEBUG>"
-    "$<$<CONFIG:RelWithDebInfo>:-O2;-g;-DNDEBUG>"
-    "$<$<CONFIG:MinSizeRel>:-Os;-DNDEBUG>"
-)
-add_link_options(
-    "$<$<CONFIG:Debug>:-fsanitize=address,undefined;--coverage>"
-)
+# Export the compiler commands for LSP programs
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Check if Inter Procedural Optimization is supported
 include(CheckIPOSupported)
@@ -57,10 +50,9 @@ function(fetch_dependency dependencyName gitRepo gitTag)
 endfunction()
 
 # Configure options for dependencies
-set(FTXUI_ENABLE_INSTALL OFF)
 
 # Declare dependencies
-fetch_dependency(ftxui https://github.com/arthursonzogni/ftxui.git v7.0.3)
+fetch_dependency(raylib https://github.com/raysan5/raylib.git dbce4e4bc87481de311516c25395fd1b121b3ea1)
 
 # Set target name
 set(TARGET_NAME "mazeTest")
@@ -79,7 +71,7 @@ target_include_directories(${TARGET_NAME} PRIVATE
 
 # Set target link libraries
 target_link_libraries(${TARGET_NAME}
-    PRIVATE ftxui::ftxui
+    PRIVATE raylib
 )
 
 target_compile_definitions(${TARGET_NAME} PRIVATE DEBUG_BUILD=$<CONFIG:Debug>)

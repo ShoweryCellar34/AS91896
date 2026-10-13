@@ -1,303 +1,226 @@
 #include <algorithm>
-#include <cassert>
-#include <chrono>
-#include <cstdint>
-#include <ftxui/component/app.hpp>
-#include <ftxui/dom/elements.hpp>
-#include <ftxui/dom/node.hpp>
-#include <ftxui/screen/screen.hpp>
+#include <cstddef>
 #include <iostream>
-#include <limits>
+#include <memory>
 #include <random>
+#include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
-#include <ftxui/ftxui.hpp>
-
-typedef std::uint16_t MAZE_DIMENSION;
-typedef std::uint32_t MAZE_CELL_ITERATOR;
-typedef std::uint64_t MAZE_EDGE_ITERATOR;
-
-static_assert(sizeof(MAZE_DIMENSION) <= sizeof(std::uintmax_t),     "MAZE_DIMENSION cannot be larger than std::uintmax_t");
-static_assert(sizeof(MAZE_CELL_ITERATOR) <= sizeof(std::uintmax_t), "MAZE_CELL_ITERATOR cannot be larger than std::uintmax_t");
-static_assert(sizeof(MAZE_EDGE_ITERATOR) <= sizeof(std::uintmax_t), "MAZE_EDGE_ITERATOR cannot be larger than std::uintmax_t");
-
-static_assert(std::numeric_limits<MAZE_CELL_ITERATOR>::max() >= ((size_t)std::numeric_limits<MAZE_DIMENSION>::max() * std::numeric_limits<MAZE_DIMENSION>::max()),
-    "MAZE_CELL_ITERATOR must be able to hold the max of MAZE_DIMENSION squared");
-static_assert(std::numeric_limits<MAZE_EDGE_ITERATOR>::max() >= ((size_t)std::numeric_limits<MAZE_CELL_ITERATOR>::max() * 2),
-    "MAZE_EDGE_ITERATOR must be able to hold the max of MAZE_CELL_ITERATOR times 2");
+#include <raylib.h>
 
 struct Cell {
-    Cell*              root     = nullptr;
-    std::vector<Cell*> children = {};
-    MAZE_DIMENSION     x        = 0,
-                       y        = 0;
+    size_t id = 0;
+    std::shared_ptr<Cell> parent;
+    std::shared_ptr<Cell> child;
 
-    Cell() {};
-    Cell(Cell* root, MAZE_DIMENSION x, MAZE_DIMENSION y): root(root), x(x), y(y) {
-        if(this->root) this->root->children.push_back(this);
-    };
-};
+    size_t x = 0;
+    size_t y = 0;
+    std::shared_ptr<Cell> up;
+    std::shared_ptr<Cell> down;
+    std::shared_ptr<Cell> left;
+    std::shared_ptr<Cell> right;
+    short connections = 0;
 
-struct MazeEdge {
-    Cell* cell1 = nullptr;
-    Cell* cell2 = nullptr;
+    short searched = 0;
 
-    MazeEdge() {};
-    MazeEdge(Cell* cell1, Cell* cell2): cell1(cell1), cell2(cell2) {};
-
-    bool operator==(const MazeEdge& other) const {
-        bool cell1Same = false, cell2Same = false;
-        if(this->cell1 == other.cell1) {
-            cell1Same = true;
-        }
-        if(this->cell2 == other.cell2) {
-            cell2Same = true;
-        }
-        return cell1Same && cell2Same;
+    Cell(size_t id) {
+        this->id = id;
     }
 };
 
-struct Maze {
-    std::vector<Cell>     cells    = {};
-    Cell                  cellTree = Cell();
-    std::vector<MazeEdge> edges    = {};
-    MAZE_DIMENSION        width    = 0,
-                          height   = 0;
+struct Edge {
+    std::shared_ptr<Cell> cellA;
+    std::shared_ptr<Cell> cellB;
 
-    Maze(MAZE_DIMENSION width, MAZE_DIMENSION height): width(width), height(height) {
-        // Reserve space for the cells and edges, this is optional, but it does reduce memory allocations
-        this->cells.reserve((MAZE_CELL_ITERATOR)this->width * this->height);
-        this->cellTree.children.reserve((MAZE_CELL_ITERATOR)this->width * this->height);
-        this->edges.resize((MAZE_CELL_ITERATOR)this->width * this->height * 2 - this->width - this->height);
-
-        for(MAZE_CELL_ITERATOR i = 0; i < (MAZE_CELL_ITERATOR)this->width * this->height; i++) {
-            this->cells.emplace_back(&this->cellTree, i % this->width, i / this->width);
-        }
-        MAZE_EDGE_ITERATOR currentMazeEdge = 0;
-        for(MAZE_DIMENSION y = 0; y < this->height; y++) {
-            for(MAZE_DIMENSION x = 0; x < this->width; x++) {
-                if((x + 1) < this->width) {
-                    this->edges[currentMazeEdge].cell1   = &this->cells[(MAZE_CELL_ITERATOR)this->width * y + x];
-                    this->edges[currentMazeEdge++].cell2 = &this->cells[(MAZE_CELL_ITERATOR)this->width * y + x + 1];
-                }
-            }
-        }
-        for(MAZE_DIMENSION x = 0; x < this->width; x++) {
-            for(MAZE_DIMENSION y = 0; y < this->height; y++) {
-                if((y + 1) < this->height) {
-                    this->edges[currentMazeEdge].cell1   = &this->cells[(MAZE_CELL_ITERATOR)this->width * y + x];
-                    this->edges[currentMazeEdge++].cell2 = &this->cells[(MAZE_CELL_ITERATOR)this->width * (y + 1) + x];
-                }
-            }
-        }
-    };
+    Edge(std::shared_ptr<Cell>& cellA, std::shared_ptr<Cell>& cellB) {
+        this->cellA = cellA;
+        this->cellB = cellB;
+    }
 };
 
-int main(int argc, char* argv[]) {
-    std::vector<std::string> arguments(argv, argv + argc);
+static int getIntInput(const std::string& name, int maxLength, int minValue) {
+    std::string storage;
+    std::cout << "Enter " << name << ", only characters 0-9 allowed, max characters " << maxLength << ", and minimum value " << minValue << ": " << std::flush;
+    int error = 0;
+    do {
+        if(error) std::cout << (error == 1 ? "(too long): " : (error == 2 ? "(invalid characters): " : "(too small): ")) << "Enter " << name << ", only characters 0-9 allowed, max characters " << maxLength << ", and minimum value " << minValue << ": " << std::flush;
+        std::getline(std::cin, storage);
+        error = 0;
+        if(storage.length() > (size_t)maxLength) {
+            error = 1;
+            continue;
+        }
+        for(char& c : storage) {
+            if(c < 48 || c > 57) error = 2;
+            break;
+        }
+        if(error) continue;
+        if(std::stoi(storage) < minValue) error = 3;
+    } while(error);
+    return std::stoi(storage);
+}
 
-    MAZE_DIMENSION mazeWidth = 3, mazeHeight = 3;
+int main(void) {
 
-    // {
-    //     using namespace ftxui;
+    size_t width = (size_t)getIntInput("maze width", 2, 2);
+    size_t height = (size_t)getIntInput("maze height", 2, 2);
 
-    //     auto screen = App::TerminalOutput();
+    float windowWidthLimit = (float)getIntInput("max window width", 4, 200);
+    float windowHeightLimit = (float)getIntInput("max window height", 4, 200);
+    float windowScale = (float)width / (float)height > 1.0f ? windowWidthLimit / (float)width : windowHeightLimit / (float)height;
+    int stepRate = getIntInput("the target number of maze solver steps per second", 5, 1);
 
-    //     std::string mazeWidthString;
-    //     std::string mazeHeightString;
+    InitWindow((int)((float)width * windowScale), (int)((float)height * windowScale), (std::to_string(width) + "x" + std::to_string(height) + " Maze").c_str());
+    SetTargetFPS(stepRate);
 
-    //     std::string widthStatusString;
-    //     std::string heightStatusString;
-
-    //     MAZE_DIMENSION minWidth  = 2;
-    //     MAZE_DIMENSION minHeight = 2;
-
-    //     InputOption mazeWidthOption;
-    //     mazeWidthOption.multiline = false;
-    //     Component mazeWidthInput = Input(&mazeWidthString, &widthStatusString, mazeWidthOption);
-    //     mazeWidthInput |= CatchEvent([&](Event event) {
-    //         if(event.is_character() && !std::isdigit(event.character()[0])) return true;
-    //         return false;
-    //     });
-
-    //     InputOption mazeHeightOption;
-    //     mazeHeightOption.multiline = false;
-    //     Component mazeHeightInput = Input(&mazeHeightString, &heightStatusString, mazeHeightOption);
-    //     mazeHeightInput |= CatchEvent([&](Event event) {
-    //         if(event.is_character() && !std::isdigit(event.character()[0])) return true;
-    //         return false;
-    //     });
-
-    //     auto submitButton = Button("Submit", [&](){
-    //         bool invalidInput = false;
-
-    //         if(mazeWidthString == "") {
-    //             widthStatusString = "Width must not be empty";
-    //             invalidInput = true;
-    //         } if((MAZE_DIMENSION)std::stoll(mazeWidthString) < minWidth) {
-    //             mazeWidthString   = "";
-    //             widthStatusString = "Width must not be less than " + std::to_string(minWidth) + "";
-    //             invalidInput = true;
-    //         } else if(mazeHeightString == "") {
-    //             heightStatusString = "Height must not be empty";
-    //             invalidInput = true;
-    //         } else if((MAZE_DIMENSION)std::stoll(mazeHeightString) < minHeight) {
-    //             mazeHeightString   = "";
-    //             heightStatusString = "Height must not be less than " + std::to_string(minHeight) + "";
-    //             invalidInput = true;
-    //         }
-
-    //         if(!invalidInput) screen.ExitLoopClosure()();
-    //     });
-    //     auto clearButton  = Button("Clear", [&](){
-    //         mazeWidthString    = "";
-    //         mazeHeightString   = "";
-    //         widthStatusString  = "Cleared width";
-    //         heightStatusString = "Cleared height";
-    //     });
-
-    //     // The component tree:
-    //     auto component = Container::Vertical({
-    //         mazeWidthInput,
-    //         mazeHeightInput,
-    //         submitButton,
-    //         clearButton
-    //     });
-
-    //     // Tweak how the component tree is rendered:
-    //     auto renderer = Renderer(component, [&] {
-    //     return vbox({
-    //                 hbox(text("(MAX: " + std::to_string((MAZE_DIMENSION)-1) + " MIN: " + std::to_string(minWidth)  + ") Maze Width:  "), mazeWidthInput->Render()),
-    //                 hbox(text("(MAX: " + std::to_string((MAZE_DIMENSION)-1) + " MIN: " + std::to_string(minHeight) + ") Maze height: "), mazeHeightInput->Render()),
-    //                 separator(),
-    //                 vbox(submitButton->Render(), clearButton->Render()),
-    //             }) |
-    //             border;
-    //     });
-
-    //     screen.Loop(renderer);
-
-    //     mazeWidth  = (MAZE_DIMENSION)std::stoll(mazeWidthString);
-    //     mazeHeight = (MAZE_DIMENSION)std::stoll(mazeHeightString);
-    // }
-
-    Maze maze(mazeWidth, mazeHeight);
-
-    // This is for debugging, it prints each cells in the maze grids iterators in a grid shape, then prints the list of edges following this template "iterator1|iterator2 "
-
-    // std::vector<Node*> nodePtrs;
-    // nodePtrs.reserve(maze.cells.size());
-    // for(MAZE_CELL_ITERATOR i = 0; i < maze.cells.size(); i++) {
-    //     nodePtrs.push_back(&maze.cells[i]);
-    // }
-
-    // for(MAZE_DIMENSION y = 0; y < maze.height; y++) {
-    //     for(MAZE_DIMENSION x = 0; x < maze.width; x++) {
-    //         std::cout << std::find(nodePtrs.begin(), nodePtrs.end(), &maze.cells[maze.width * y + x]) - nodePtrs.begin() << ' ';
-    //     }
-    //     std::cout << std::endl;
-    // }
-    // for(MazeEdge& edge : maze.edges) {
-    //     std::cout << std::find(nodePtrs.begin(), nodePtrs.end(), edge.cell1) - nodePtrs.begin() << '|' << std::find(nodePtrs.begin(), nodePtrs.end(), edge.cell2) - nodePtrs.begin() << ' ';
-    // }
-
-    // Copy a pointer of each maze edge to a queue of edges to be processed
-    // this means an edge can be processed and not removed with no risk of it being reprocessed
-    std::vector<MazeEdge*> waitingEdges;
-    waitingEdges.reserve(maze.edges.size());
-    for(MAZE_CELL_ITERATOR i = 0; i < maze.edges.size(); i++) {
-        waitingEdges.push_back(&maze.edges[i]);
+    std::vector<std::shared_ptr<Cell>> cellFamilies;
+    std::vector<std::shared_ptr<Cell>> cells;
+    cellFamilies.reserve(width * height);
+    cells.resize(width * height);
+    for(size_t i = 0; i < width * height; i++) {
+        cellFamilies.push_back(std::make_shared<Cell>(i));
+        cellFamilies[i]->x = i % width;
+        cellFamilies[i]->y = i / width;
+        cells[i] = cellFamilies[i];
     }
 
-    // Shuffle the order of the waiting edges queue, this makes Kruskal's algorithm random
+    std::vector<Edge> edges;
+    edges.reserve(width * height * 2 - width - height);
+
+    std::shared_ptr<Cell> prevCell;
+    for(size_t x = 0; x < width; x++) {
+        for(size_t y = 0; y < height; y++) {
+            if(prevCell) {
+                edges.emplace_back(prevCell, cellFamilies[width * y + x]);
+            }
+            prevCell = cellFamilies[width * y + x];
+        }
+        prevCell = nullptr;
+    }
+    for(size_t y = 0; y < height; y++) {
+        for(size_t x = 0; x < width; x++) {
+            if(prevCell) {
+                edges.emplace_back(prevCell, cellFamilies[width * y + x]);
+            }
+            prevCell = cellFamilies[width * y + x];
+        }
+        prevCell = nullptr;
+    }
+
     std::random_device randomDevice;
-    std::mt19937       randomProvider(randomDevice());
-    std::ranges::shuffle(waitingEdges, randomProvider);
+    std::mt19937 generator(randomDevice());
+    std::shuffle(edges.begin(), edges.end(), generator);
 
-    // Debug print all cell addresses in the cell tree before processing
-    // for(MAZE_CELL_ITERATOR i = 0; i < maze.cellTree.children.size(); i++) {
-    //     std::cout << maze.cellTree.children[i] << std::endl;
-    // }
-    // std::cout << std::endl;
-
-    while(maze.cellTree.children.size() > 1) {
-        MazeEdge* edge = waitingEdges[waitingEdges.size() - 1];
-        waitingEdges.pop_back();
-
-        bool separateTrees = true;
-
-        std::vector<Cell*> cell1Parents;
-        Cell* nextParent = edge->cell1;
-        while(nextParent->root) {
-            cell1Parents.push_back(nextParent);
-            nextParent = nextParent->root;
+    std::vector<Edge> mazeEdges;
+    mazeEdges.reserve(width * height * 2 - width - height);
+    for(Edge& edge : edges) {
+        bool sameFamily = false;
+        for(std::shared_ptr<Cell> cell = edge.cellA; cell; cell = cell->parent) {
+            if(cell == edge.cellB) sameFamily = true;
         }
-        std::vector<Cell*> cell2Parents;
-        nextParent = edge->cell2;
-        while(nextParent->root) {
-            cell2Parents.push_back(nextParent);
-            nextParent = nextParent->root;
+        std::shared_ptr<Cell> foot;
+        for(std::shared_ptr<Cell> cell = edge.cellA; cell; cell = cell->child) {
+            if(cell == edge.cellB) sameFamily = true;
+            foot = cell;
         }
-        nextParent = edge->cell2;
-        for(MAZE_CELL_ITERATOR i = 0; i < cell2Parents.size(); i++) {
-            if(std::find(cell1Parents.begin(), cell1Parents.end(), cell2Parents[i]) != cell1Parents.end()) separateTrees = false;
-        }
-
-        if(separateTrees) {
-            cell1Parents[cell1Parents.size() - 1]->children.push_back(cell2Parents[cell2Parents.size() - 1]);
-            cell2Parents[cell2Parents.size() - 1]->root = cell1Parents[cell1Parents.size() - 1];
-            // Debug print the memory address of the cell we want to remove from the cell tree root
-            // std::cout << cell2Parents[cell2Parents.size() - 1] << std::endl;
-            assert(std::erase(maze.cellTree.children, cell2Parents[cell2Parents.size() - 1]));
-            assert(std::erase(maze.edges, *edge));
-        }
-        std::vector<std::string> mazeText(maze.height + (maze.height - 1));
-        for(MAZE_DIMENSION y = 0; y < maze.height + (maze.height - 1); y++) {
-            mazeText[y].assign(maze.width + (maze.width - 1), '*');
-            if(y % 2) {
-                for(MAZE_DIMENSION x = 0; x < mazeText[y].size(); x++) {
-                    mazeText[y][x] = x % 2 ? '@' : '*';
-                }
+        if(sameFamily) {
+            mazeEdges.emplace_back(edge.cellA, edge.cellB);
+        } else {
+            std::shared_ptr<Cell> head;
+            for(std::shared_ptr<Cell> cell = edge.cellB; cell; cell = cell->parent) {
+                head = cell;
             }
-        }
-        for(MAZE_EDGE_ITERATOR i = 0; i < maze.edges.size(); i++) {
-            char edgeChar = '.';
-            if(maze.edges[i].cell1->y == maze.edges[i].cell2->y) {
-                edgeChar = '|';
+            foot->child = head;
+            head->parent = foot;
+            if(std::erase_if(cellFamilies, [&](std::shared_ptr<Cell> cell) { return cell == head; }) != 1) {
+                throw std::runtime_error("Bad Error :(");
+            }
+
+            if(edge.cellA->x == edge.cellB->x) {
+                edge.cellA->down = edge.cellB;
+                edge.cellA->connections++;
+                edge.cellB->up = edge.cellA;
+                edge.cellB->connections++;
             } else {
-                edgeChar = '-';
+                edge.cellA->right = edge.cellB;
+                edge.cellA->connections++;
+                edge.cellB->left = edge.cellA;
+                edge.cellB->connections++;
             }
-            MAZE_DIMENSION edgeX = (((maze.edges[i].cell1->x + 1) * 2 - 2) + ((maze.edges[i].cell2->x + 1) * 2 - 2)) / 2,
-                        edgeY = (((maze.edges[i].cell1->y + 1) * 2 - 2) + ((maze.edges[i].cell2->y + 1) * 2 - 2)) / 2;
-            mazeText[edgeY][edgeX] = edgeChar;
         }
-
-        std::string mazeTextBuffer(mazeText[0].size() * 2 + 4, '-');
-        std::cout << mazeTextBuffer << std::endl;
-        for(MAZE_DIMENSION y = 0; y < mazeText.size(); y++) {
-            std::cout << "||";
-            for(MAZE_DIMENSION x = 0; x < mazeText[y].size(); x++) {
-                std::cout << mazeText[y][x] << mazeText[y][x];
-            }
-            std::cout << "||" << std::endl;
-        }
-        std::cout << mazeTextBuffer << std::endl;
-
-        std::this_thread::sleep_for(std::chrono::seconds(2));
     }
 
-    // std::string mazeTextBuffer(mazeText[0].size() * 2 + 4, '-');
-    // std::cout << mazeTextBuffer << std::endl;
-    // for(MAZE_DIMENSION y = 0; y < mazeText.size(); y++) {
-    //     std::cout << "||";
-    //     for(MAZE_DIMENSION x = 0; x < mazeText[y].size(); x++) {
-    //         std::cout << mazeText[y][x] << mazeText[y][x];
-    //     }
-    //     std::cout << "||" << std::endl;
-    // }
-    // std::cout << mazeTextBuffer << std::endl;
+    while(!WindowShouldClose()) {
+        BeginDrawing();
 
-    std::cout << std::endl;
+        ClearBackground(WHITE);
+
+        for(const Edge& edge : mazeEdges) {
+            size_t cellAX = edge.cellA->id % width;
+            size_t cellAY = edge.cellA->id / width;
+            size_t cellBX = edge.cellB->id % width;
+            size_t cellBY = edge.cellB->id / width;
+
+            float centerX = (float)(cellAX + cellBX) / 2.0f;
+            float centerY = (float)(cellAY + cellBY) / 2.0f;
+
+            if(centerX == (float)cellAX) {
+                DrawLine((int)(windowScale * (centerX)), (int)(windowScale * (centerY + 0.5f)), (int)(windowScale * (centerX + 1.0f)), (int)(windowScale * (centerY + 0.5f)), BLACK);
+            } else {
+                DrawLine((int)(windowScale * (centerX + 0.5f)), (int)(windowScale * (centerY)), (int)(windowScale * (centerX + 0.5f)), (int)(windowScale * (centerY + 1.0f)), BLACK);
+            }
+        }
+
+        for(const std::shared_ptr<Cell>& cell : cells) {
+            float centerX = (float)cell->x + 0.5f;
+            float centerY = (float)cell->y + 0.5f;
+
+            if(cell->searched == 1) DrawCircle((int)(centerX * windowScale), (int)(centerY * windowScale), 6.0f, RED);
+            if(cell->searched == 2) DrawCircle((int)(centerX * windowScale), (int)(centerY * windowScale), 6.0f, GREEN);
+        }
+
+        DrawText("Press Esc to close", 0, 0, 24, PURPLE);
+
+        EndDrawing();
+
+        static std::shared_ptr<Cell> currentCell = cells[0];
+        static std::vector<std::shared_ptr<Cell>> junctionStack;
+        if(currentCell == cells[0]) {
+            junctionStack.emplace_back();
+            junctionStack[junctionStack.size() - 1] = currentCell;
+            currentCell->connections++;
+        }
+        if(currentCell == cells[cells.size() - 1]) {
+            currentCell->searched = 2;
+        } else {
+            if(currentCell->connections > 2) {
+                if(!currentCell->searched) {
+                    junctionStack.emplace_back();
+                    junctionStack[junctionStack.size() - 1] = currentCell;
+                } else {
+                    short options = 0;
+                    if(currentCell->up && !currentCell->up->searched) options++;
+                    if(currentCell->down && !currentCell->down->searched) options++;
+                    if(currentCell->left && !currentCell->left->searched) options++;
+                    if(currentCell->right && !currentCell->right->searched) options++;
+                    if(options == 1) junctionStack.pop_back();
+                }
+            }
+            currentCell->searched = 1;
+            if(currentCell->up && !currentCell->up->searched) {
+                currentCell = currentCell->up;
+            } else if(currentCell->down && !currentCell->down->searched) {
+                currentCell = currentCell->down;
+            } else if(currentCell->left && !currentCell->left->searched) {
+                currentCell = currentCell->left;
+            } else if(currentCell->right && !currentCell->right->searched) {
+                currentCell = currentCell->right;
+            } else {
+                currentCell = junctionStack[junctionStack.size() - 1];
+            }
+        }
+    }
+
+    return 0;
 }

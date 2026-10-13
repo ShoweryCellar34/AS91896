@@ -1,2 +1,1 @@
-Application Startup Message!
-These lines were read from resources/resource.txt!
+data
