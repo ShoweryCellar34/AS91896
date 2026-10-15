@@ -58,3 +58,7 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Don't push my nix stuff
+flake.nix
+flake.lock
